@@ -8,3 +8,32 @@ __pycache__
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+
+# --- 环境变量与密钥 (最重要！防止泄露 AWS 凭证) ---
+.env
+.env.*
+.secrets
+*.pem
+*.cap
+
+# --- 操作系统特定文件 ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Python 额外项 ---
+*.py[cod]
+*$py.class
+dist/
+build/
+.ipynb_checkpoints/
+
+# --- Node/CDK 补充 ---
+node_modules/
+.npm
+chart.js
+
+# --- Docker 相关 (如果在本地生成了临时日志或镜像层) ---
+*.log
+docker-compose.override.yml
