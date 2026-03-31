@@ -1,0 +1,26 @@
+$test_body = @{
+    action = "test"
+    # 这里填入你想让模型预测的数据路径（在 S3 里的路径）
+    data_key = "test/test_data.csv" 
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "https://gpqtgdpiadnalwme7d7vs5vcua0eabdk.lambda-url.us-east-2.on.aws/" `
+                  -Method Post `
+                  -ContentType "application/json" `
+                  -Body $test_body
+				  
+				  
+				  
+# 1. 构造训练请求体
+$train_body = @{
+    action   = "train"                           # 关键：告诉 Lambda 这次是训练任务
+    data_key = "train/training_data.csv"         # S3 中存放训练数据的路径
+    # 如果你的代码支持，还可以传入超参数
+    # hyperparams = @{ "epochs" = 10; "batch_size" = 32 } 
+} | ConvertTo-Json
+
+# 2. 发起请求
+Invoke-RestMethod -Uri "https://gpqtgdpiadnalwme7d7vs5vcua0eabdk.lambda-url.us-east-2.on.aws/" `
+                  -Method Post `
+                  -ContentType "application/json" `
+                  -Body $train_body

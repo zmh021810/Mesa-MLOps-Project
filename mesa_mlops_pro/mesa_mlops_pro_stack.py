@@ -10,6 +10,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+
 class MesaMlopsProStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -40,7 +41,7 @@ class MesaMlopsProStack(Stack):
             code=_lambda.DockerImageCode.from_image_asset(
                 directory=".",
                 file="docker/Dockerfile",
-                cmd=["src.predictor.predict.handler"]
+                cmd=["src.predictor.predict.handler"],
             ),
             memory_size=1024,
             timeout=Duration.seconds(150),
@@ -55,7 +56,9 @@ class MesaMlopsProStack(Stack):
             "MesaSageMakerRole",
             assumed_by=iam.ServicePrincipal("sagemaker.amazonaws.com"),
             managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonSageMakerFullAccess")
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "AmazonSageMakerFullAccess"
+                )
             ],
         )
 
@@ -66,14 +69,14 @@ class MesaMlopsProStack(Stack):
             "MesaDispatcher",
             runtime=_lambda.Runtime.PYTHON_3_9,
             handler="dispatcher.handler",
-            code=_lambda.Code.from_asset("src/dispatcher"), # 记得新建这个文件夹
+            code=_lambda.Code.from_asset("src/dispatcher"),  # 记得新建这个文件夹
             timeout=Duration.seconds(30),
             environment={
                 "BUCKET_NAME": bucket.bucket_name,
                 "TRAIN_IMAGE_URI": ml_image_asset.image_uri,
                 "SAGEMAKER_ROLE_ARN": sagemaker_role.role_arn,
                 "PREDICT_FUNCTION_NAME": predictor_lambda.function_name,
-            }
+            },
         )
 
         # 🌟 6. 权限交叉配置
@@ -84,21 +87,24 @@ class MesaMlopsProStack(Stack):
         # C. 允许 Dispatcher 列出 S3 文件 (用于“自动寻路”) 并调用训练/预测
         bucket.grant_read(dispatcher_lambda)
         predictor_lambda.grant_invoke(dispatcher_lambda)
-        
+
         # D. 赋予 Dispatcher 启动 SageMaker 的权限
-        dispatcher_lambda.add_to_role_policy(iam.PolicyStatement(
-            actions=["sagemaker:CreateTrainingJob", "iam:PassRole"],
-            resources=["*"]
-        ))
+        dispatcher_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["sagemaker:CreateTrainingJob", "iam:PassRole"], resources=["*"]
+            )
+        )
 
         # 🌟 7. 开放 Function URL (让你可以从本地直接 curl 指挥)
         dispatcher_url = dispatcher_lambda.add_function_url(
-            auth_type=_lambda.FunctionUrlAuthType.NONE # 生产环境建议后续加 IAM 校验
+            auth_type=_lambda.FunctionUrlAuthType.NONE  # 生产环境建议后续加 IAM 校验
         )
 
         # 8. 关键输出
         CfnOutput(self, "BucketName", value=bucket.bucket_name)
-        CfnOutput(self, "DispatcherUrl", value=dispatcher_url.url) # 以后你只需记住这个 URL
+        CfnOutput(
+            self, "DispatcherUrl", value=dispatcher_url.url
+        )  # 以后你只需记住这个 URL
         CfnOutput(self, "LambdaFunctionName", value=predictor_lambda.function_name)
         CfnOutput(self, "SageMakerRoleArn", value=sagemaker_role.role_arn)
         CfnOutput(self, "ImageUri", value=ml_image_asset.image_uri)

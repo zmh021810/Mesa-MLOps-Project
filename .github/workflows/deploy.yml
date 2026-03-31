@@ -1,0 +1,55 @@
+name: Mesa_MLOps_pro Deployment
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ci-cd-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- 1. 环境准备阶段 ---
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9.13"
+          cache: 'pip'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # --- 2. 依赖安装阶段 ---
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black
+          # 注意：这里我们不再使用 -g 全局安装，而是直接依靠 npx 运行时调用
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      # --- 3. 质量检查阶段 (CI) ---
+      - name: Check Format with Black
+        run: black --check .
+
+      # --- 4. AWS 部署阶段 (CD) ---
+      - name: Configure AWS Credentials
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1 
+
+      - name: CDK Deploy
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          # 使用 npx 显式调用 aws-cdk
+          # 它会自动找到对应的版本并执行，更加安全稳健
+          npx aws-cdk deploy --all --require-approval never
