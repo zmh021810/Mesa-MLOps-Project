@@ -55,4 +55,6 @@ command.
  * `cdk diff`        compare deployed stack with current state
  * `cdk docs`        open CDK documentation
 
-Enjoy!
+python run.py train --dispatcher MesaMlopsDispatcher --client ClientA
+
+python run.py predict --dispatcher MesaMlopsDispatcher --client ClientA

@@ -1,56 +1,38 @@
+import csv
 from aws_cdk import (
     Stack,
+    RemovalPolicy,
+    Duration,
+    CfnOutput,
     aws_s3 as s3,
     aws_lambda as _lambda,
     aws_iam as iam,
     aws_ecr_assets as ecr_assets,
-    CfnOutput,
-    Duration,
-    RemovalPolicy,
 )
-from constructs import Construct
 
 
 class MesaMlopsProStack(Stack):
-
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope, construct_id, **kwargs):
         super().__init__(scope, construct_id, **kwargs)
 
-        # 1. 创建 S3 存储桶 (保持不变)
-        bucket = s3.Bucket(
-            self,
-            "MesaProStorage",
-            versioned=True,
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-        )
+        # --- 1. Load Client List ---
+        # Reads client names from a CSV file to drive multi-tenant resource creation
+        clients = []
+        try:
+            with open("clients.csv", mode="r", encoding="utf-8") as f:
+                clients = [row[0].strip() for row in csv.reader(f) if row]
+        except FileNotFoundError:
+            # Fallback for local testing or CI/CD environments
+            print("Warning: clients.csv not found.")
 
-        # 2. 定义镜像 Asset (用于 SageMaker 训练和 Predictor)
+        # --- 2. Shared Docker Image Asset ---
+        # Unified image for both SageMaker Training and Batch Transformation
         ml_image_asset = ecr_assets.DockerImageAsset(
-            self,
-            "MesaProImage",
-            directory=".",
-            file="docker/Dockerfile",
+            self, "MesaProImage", directory=".", file="docker/Dockerfile"
         )
 
-        # 3. 创建预测 Lambda (Predictor)
-        # 修改点：handler 还是叫 handler，但代码逻辑下午我们会更新
-        predictor_lambda = _lambda.DockerImageFunction(
-            self,
-            "MesaPredictor",
-            code=_lambda.DockerImageCode.from_image_asset(
-                directory=".",
-                file="docker/Dockerfile",
-                cmd=["src.predictor.predict.handler"],
-            ),
-            memory_size=1024,
-            timeout=Duration.seconds(150),
-            environment={
-                "BUCKET_NAME": bucket.bucket_name,
-            },
-        )
-
-        # 4. 创建 SageMaker IAM 角色
+        # --- 3. Shared SageMaker Execution Role ---
+        # Service role used by SageMaker instances to access AWS resources
         sagemaker_role = iam.Role(
             self,
             "MesaSageMakerRole",
@@ -62,49 +44,60 @@ class MesaMlopsProStack(Stack):
             ],
         )
 
-        # 🌟 5. 新增：创建指挥官 Lambda (Dispatcher)
-        # 这是一个轻量级 Lambda，直接用 Python 脚本，不需要 Docker 镜像
+        # --- 4. Multi-Tenant Storage (Isolated S3 Buckets) ---
+        # Create a dedicated physical bucket for each external client to ensure data isolation
+        client_buckets = {}
+        for client in clients:
+            bucket = s3.Bucket(
+                self,
+                f"Bucket-{client}",
+                bucket_name=f"mesa-mlops-{client.lower()}-storage",
+                versioned=True,
+                removal_policy=RemovalPolicy.DESTROY,  # Objects will be deleted on stack deletion
+                auto_delete_objects=True,
+            )
+            client_buckets[client] = bucket
+
+        # --- 5. Dispatcher Lambda (The Orchestrator) ---
+        # Lightweight function to trigger SageMaker jobs based on incoming requests
         dispatcher_lambda = _lambda.Function(
             self,
             "MesaDispatcher",
             runtime=_lambda.Runtime.PYTHON_3_9,
             handler="dispatcher.handler",
-            code=_lambda.Code.from_asset("src/dispatcher"),  # 记得新建这个文件夹
-            timeout=Duration.seconds(30),
+            code=_lambda.Code.from_asset("src/dispatcher"),
+            timeout=Duration.seconds(60),
             environment={
-                "BUCKET_NAME": bucket.bucket_name,
-                "TRAIN_IMAGE_URI": ml_image_asset.image_uri,
+                "ML_IMAGE_URI": ml_image_asset.image_uri,
                 "SAGEMAKER_ROLE_ARN": sagemaker_role.role_arn,
-                "PREDICT_FUNCTION_NAME": predictor_lambda.function_name,
             },
         )
 
-        # 🌟 6. 权限交叉配置
-        # A. 允许 Predictor 读写 S3
-        bucket.grant_read_write(predictor_lambda)
-        # B. 允许 SageMaker 读写 S3
-        bucket.grant_read_write(sagemaker_role)
-        # C. 允许 Dispatcher 列出 S3 文件 (用于“自动寻路”) 并调用训练/预测
-        bucket.grant_read(dispatcher_lambda)
-        predictor_lambda.grant_invoke(dispatcher_lambda)
+        # --- 6. Security & Permission Mapping ---
+        # Grant specific access rights to the shared roles for each tenant's bucket
+        for client, bucket in client_buckets.items():
+            # Allow SageMaker to read training data and write model/inference results
+            bucket.grant_read_write(sagemaker_role)
+            # Allow Dispatcher to inspect bucket contents for automated routing
+            bucket.grant_read(dispatcher_lambda)
 
-        # D. 赋予 Dispatcher 启动 SageMaker 的权限
+        # --- 7. Dispatcher IAM Policy Expansion ---
+        # Grants Dispatcher the ability to manage SageMaker jobs and pass the execution role
         dispatcher_lambda.add_to_role_policy(
             iam.PolicyStatement(
-                actions=["sagemaker:CreateTrainingJob", "iam:PassRole"], resources=["*"]
+                actions=[
+                    "sagemaker:CreateTrainingJob",
+                    "sagemaker:CreateTransformJob",
+                    "sagemaker:CreateModel",
+                    "iam:PassRole",
+                ],
+                resources=[
+                    "*"
+                ],  # Scoping can be narrowed down to specific job ARNs if needed
             )
         )
 
-        # 🌟 7. 开放 Function URL (让你可以从本地直接 curl 指挥)
-        dispatcher_url = dispatcher_lambda.add_function_url(
-            auth_type=_lambda.FunctionUrlAuthType.NONE  # 生产环境建议后续加 IAM 校验
-        )
-
-        # 8. 关键输出
-        CfnOutput(self, "BucketName", value=bucket.bucket_name)
-        CfnOutput(
-            self, "DispatcherUrl", value=dispatcher_url.url
-        )  # 以后你只需记住这个 URL
-        CfnOutput(self, "LambdaFunctionName", value=predictor_lambda.function_name)
+        # --- 8. Infrastructure Outputs ---
+        # Export key resource details for reference or external integration
+        CfnOutput(self, "ML_IMAGE_URI", value=ml_image_asset.image_uri)
         CfnOutput(self, "SageMakerRoleArn", value=sagemaker_role.role_arn)
-        CfnOutput(self, "ImageUri", value=ml_image_asset.image_uri)

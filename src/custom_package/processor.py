@@ -2,31 +2,41 @@ import pandas as pd
 
 
 class DataProcessor:
-    """负责将原始 DataFrame 转换为模型可用的 X 和 y"""
+    """Responsible for transforming raw DataFrames into model-ready X and y."""
 
     def __init__(self, target_column=None):
         self.target_column = target_column
 
     def split_features_target(self, df):
         """
-        根据目标列名切分 X 和 y。
-        如果没指定 target_column，默认最后一列为 y。
+        Splits the DataFrame into features (X) and target (y).
+        Explicitly drops the first column (assumed to be ID) to avoid noise.
         """
-        print(
-            f"📊 正在处理数据，目标列: {self.target_column if self.target_column else '最后一列'}"
-        )
+        # --- 1. Drop the first column (ID) ---
+        # Since the first column is an ID, it provides no predictive value.
+        # We slice from index 1 to the end.
+        id_col_name = df.columns[0]
+        print(f"🗑️ Dropping the first column (ID): {id_col_name}")
+        df_processed = df.iloc[:, 1:]
 
-        if self.target_column and self.target_column in df.columns:
-            X = df.drop(columns=[self.target_column])
-            y = df[self.target_column]
+        # --- 2. Determine Target Column ---
+        target_name = self.target_column if self.target_column else "Last Column"
+        print(f"📊 Processing features. Target selected: {target_name}")
+
+        if self.target_column and self.target_column in df_processed.columns:
+            X = df_processed.drop(columns=[self.target_column])
+            y = df_processed[self.target_column]
         else:
-            X = df.iloc[:, :-1]
-            y = df.iloc[:, -1]
+            # Features are everything except the last column
+            X = df_processed.iloc[:, :-1]
+            # Target is the final column
+            y = df_processed.iloc[:, -1]
 
         return X, y
 
     def clean_data(self, df):
         """
-        以后你可以在这里添加复杂的清洗逻辑（如填充缺失值、归一化等）
+        Basic cleaning logic. Currently drops any rows containing null values.
+        Can be extended for normalization or missing value imputation.
         """
         return df.dropna()
